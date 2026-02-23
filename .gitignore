@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 # Maven
+=======
+>>>>>>> 3ffb805607ead827b57eabf624b0fe11458f3bcf
 target/
 pom.xml.tag
 pom.xml.releaseBackup
@@ -6,6 +9,7 @@ pom.xml.versionsBackup
 pom.xml.next
 release.properties
 dependency-reduced-pom.xml
+<<<<<<< HEAD
 buildNumber
 .mvn/timing.properties
 .mvn/wrapper/maven-wrapper.properties
@@ -43,3 +47,15 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+=======
+buildNumber.properties
+.mvn/timing.properties
+# https://maven.apache.org/wrapper/#usage-without-binary-jar
+.mvn/wrapper/maven-wrapper.jar
+
+# Eclipse m2e generated files
+# Eclipse Core
+.project
+# JDT-specific (Eclipse Java Development Tools)
+.classpath
+>>>>>>> 3ffb805607ead827b57eabf624b0fe11458f3bcf
