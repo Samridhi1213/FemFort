@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - FemFort</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+
+<body>
+    <header>
+        <div class="container">
+            <nav>
+                <div class="logo">FemFort Admin</div>
+                <div class="nav-links">
+                    <a href="index.html">Back to App</a>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <div class="container mt-4 mb-4">
+        <!-- Login panel -->
+        <div id="login-panel" class="card" style="max-width: 400px; margin: 80px auto;">
+            <h2 class="text-center mb-4">Admin Login</h2>
+            <form id="login-form">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="username" required placeholder="Enter admin username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="password" required placeholder="Enter password">
+                </div>
+                <button type="submit" class="btn" style="width: 100%">Login</button>
+            </form>
+        </div>
+
+        <!-- Dashboard -->
+        <div id="dashboard-panel" class="hidden">
+            <!-- Hotspots -->
+            <div class="card mb-4">
+                <h2 class="mb-2">Hotspots & Alerts</h2>
+                <div style="overflow-x:auto;">
+                    <table id="hotspot-table">
+                        <thead>
+                            <tr>
+                                <th>Zone</th>
+                                <th>Severity Level (1-5)</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Location Requests -->
+            <div class="card">
+                <h2 class="mb-2">Location Requests</h2>
+                <div style="overflow-x:auto;">
+                    <table id="requests-table">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Name</th>
+                                <th>Count</th>
+                                <th>Comment</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Details Modal -->
+        <div id="details-modal" class="modal hidden">
+            <div class="modal-content">
+                <span class="close-modal" onclick="closeModal('details-modal')">&times;</span>
+                <h2 id="modal-zone-name" class="mb-2">Zone Details</h2>
+                <div id="modal-reviews" class="mt-2">
+                    <!-- Reviews populated here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Request Map Modal -->
+        <div id="request-map-modal" class="modal hidden">
+            <div class="modal-content" style="width: 90%; max-width: 800px;">
+                <span class="close-modal" onclick="closeModal('request-map-modal')">&times;</span>
+                <h2 id="request-map-title" class="mb-2">Request Location</h2>
+                <div id="admin-map"
+                    style="height: 400px; width: 100%; margin-top: 10px; border-radius: var(--radius-sm); border: 1px solid var(--border-color);">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="js/app.js"></script>
+    <script>
+        // Inline Admin Logic
+        let adminMap = null;
+        let adminMarker = null;
+        let requestGroups = []; // GLOBAL clusters
+        let currentDetailsZoneId = null;
+        let currentDetailsZoneName = '';
+
+        // ---------- LOGIN ----------
+
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const res = await fetch('api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (res.ok) {
+                    document.getElementById('login-panel').classList.add('hidden');
+                    document.getElementById('dashboard-panel').classList.remove('hidden');
+                    await loadHotspots();
+                    await loadRequests();
+                } else {
+                    alert('Invalid Credentials');
+                }
+            } catch (err) {
+                console.error('Login error:', err);
+                alert('Login failed. Check console.');
+            }
+        });
+
+        // ---------- HOTSPOTS ----------
+
+        async function loadHotspots() {
+            try {
+                const campuses = await api.getCampuses();
+                if (!campuses || campuses.length === 0) {
+                    console.log("No campuses found.");
+                    return;
+                }
+                const campusId = campuses[0].id; // Default to first campus
+
+                const zones = await api.getZones(campusId);
+                const tbody = document.querySelector('#hotspot-table tbody');
+                tbody.innerHTML = '';
+
+                zones.sort((a, b) => b.currentSafetyScore - a.currentSafetyScore);
+
+                zones.forEach(z => {
+                    let badgeClass = 'badge-safe';
+                    let statusText = 'Low Risk';
+                    let badgeStyle = '';
+
+                    if (z.currentSafetyScore >= 4.0) {
+                        badgeClass = 'badge-risk';
+                        statusText = 'Severe Risk';
+                    } else if (z.currentSafetyScore >= 3.0) {
+                        badgeClass = 'badge';
+                        badgeStyle = 'background: rgba(244, 161, 0, 0.15); color: #d35400;';
+                        statusText = 'Moderate/High Risk';
+                    } else {
+                        statusText = 'Safe';
+                    }
+
+                    const row = `
+                    <tr>
+                        <td>${z.name}</td>
+                        <td>${z.currentSafetyScore.toFixed(1)}</td>
+                        <td>
+                            <span class="badge ${badgeClass}" style="${badgeStyle}">${statusText}</span>
+                            ${z.needsReview ? '<span class="badge" style="background:#dfe6e9; color:#636e72; margin-left:5px;">Needs Review</span>' : ''}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary"
+                                onclick="viewDetails(${z.id}, '${z.name.replace(/'/g, "\\'")}')">
+                                View Details
+                            </button>
+                            <button class="btn btn-sm btn-secondary"
+                                style="border-color: #e74c3c; color: #e74c3c; margin-left:6px;"
+                                onclick="deleteZone(${z.id}, '${z.name.replace(/'/g, "\\'")}')">
+                                X
+                            </button>
+                        </td>
+                    </tr>
+                `;
+                    tbody.insertAdjacentHTML('beforeend', row);
+                });
+            } catch (err) {
+                console.error("Error loading hotspots:", err);
+            }
+        }
+
+        // ---------- REQUESTS & CLUSTERS ----------
+
+        async function loadRequests() {
+            try {
+                const res = await fetch('api/requests');
+                const requests = await res.json();
+
+                requestGroups = aggregateRequests(requests); // store globally
+                const tbody = document.querySelector('#requests-table tbody');
+                tbody.innerHTML = '';
+
+                if (!requestGroups || requestGroups.length === 0) {
+                    tbody.innerHTML =
+                        '<tr><td colspan="5" style="text-align:center; padding: 20px; color: var(--text-muted);">No pending requests</td></tr>';
+                    return;
+                }
+
+                requestGroups.forEach((g, index) => {
+                    const commentText = g.count > 1
+                        ? `${g.count} requests (multiple comments)`
+                        : (g.userComment || 'No comment');
+
+                    const row = `
+                    <tr>
+                        <td><span class="badge" style="background: #e1f5fe; color: #0288d1;">${g.requestType}</span></td>
+                        <td>${g.name}</td>
+                        <td>${g.count}</td>
+                        <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                            title="${commentText}">
+                            ${commentText}
+                        </td>
+                        <td>
+                            <div class="flex">
+                                <button class="btn btn-sm btn-secondary"
+                                        onclick="viewRequestLocation(${g.lat}, ${g.lng}, '${g.name.replace(/'/g, "\\'")}')">
+                                    Map
+                                </button>
+                                <button class="btn btn-sm" onclick="approveRequest(${index}, '${g.requestType}')">
+                                    Approve
+                                </button>
+                                <button class="btn btn-sm btn-secondary"
+                                        style="border-color: #e74c3c; color: #e74c3c;"
+                                        onclick="rejectRequest(${index})">
+                                    Reject
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+                    tbody.insertAdjacentHTML('beforeend', row);
+                });
+
+            } catch (err) {
+                console.error("Error loading requests:", err);
+            }
+        }
+
+        function aggregateRequests(requests) {
+            const groups = [];
+            const thresholdMeters = 500; // 500m radius
+
+            (requests || []).forEach(req => {
+                let added = false;
+                for (let group of groups) {
+                    const dist = L.latLng(req.lat, req.lng).distanceTo(L.latLng(group.lat, group.lng));
+                    if (dist < thresholdMeters && req.requestType === group.requestType) {
+                        group.count++;
+                        group.ids.push(req.id);
+                        added = true;
+                        break;
+                    }
+                }
+                if (!added) {
+                    groups.push({
+                        ...req,
+                        count: 1,
+                        ids: [req.id]
+                    });
+                }
+            });
+            return groups;
+        }
+
+        // Approve first request in cluster, archive others
+        async function approveRequest(groupIndex, type) {
+            const group = requestGroups[groupIndex];
+            if (!group) {
+                alert('Invalid request cluster.');
+                return;
+            }
+
+            if (!confirm(`Approve this ${type} cluster? This will create ONE location and archive the ${group.count - 1} duplicates.`)) return;
+
+            try {
+                const primaryId = group.ids[0];
+                const approveRes = await fetch('api/requests', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: primaryId, status: 'APPROVED' })
+                });
+
+                if (!approveRes.ok) {
+                    const text = await approveRes.text();
+                    console.error('Approve primary failed:', approveRes.status, text);
+                    throw new Error(text || 'Failed to approve primary request');
+                }
+
+                const otherIds = group.ids.slice(1);
+                if (otherIds.length > 0) {
+                    const rejectPromises = otherIds.map(id =>
+                        fetch('api/requests', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ id: id, status: 'REJECTED' })
+                        })
+                    );
+                    await Promise.all(rejectPromises);
+                }
+
+                alert(`Cluster approved! Created 1 location, archived ${otherIds.length} duplicates.`);
+                loadRequests();
+            } catch (e) {
+                console.error(e);
+                alert('Failed to process cluster: ' + e.message);
+            }
+        }
+
+        // Reject all requests in cluster
+        async function rejectRequest(groupIndex) {
+            const group = requestGroups[groupIndex];
+            if (!group) {
+                alert('Invalid request cluster.');
+                return;
+            }
+
+            if (!confirm(`Reject all ${group.count} request(s) in this cluster?`)) return;
+
+            try {
+                const rejectPromises = group.ids.map(id =>
+                    fetch('api/requests', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: id, status: 'REJECTED' })
+                    })
+                );
+
+                await Promise.all(rejectPromises);
+
+                alert('Request cluster rejected.');
+                loadRequests();
+            } catch (e) {
+                console.error(e);
+                alert('Failed to reject cluster.');
+            }
+        }
+
+        // ---------- ZONE DELETION ----------
+
+        async function deleteZone(zoneId, zoneName) {
+            if (!confirm(`Are you sure you want to delete zone "${zoneName}"? This cannot be undone.`)) return;
+
+            try {
+                const res = await fetch(`api/zones?id=${zoneId}`, {
+                    method: 'DELETE'
+                });
+
+                if (res.ok) {
+                    alert('Zone deleted.');
+                    loadHotspots();
+                    loadRequests();
+                } else {
+                    const text = await res.text();
+                    console.error('Delete zone failed:', res.status, text);
+                    alert('Error deleting zone: ' + (text || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Failed to delete zone.');
+            }
+        }
+
+        // ---------- DETAILS + SPAM FLAGGING ----------
+
+        async function viewDetails(zoneId, zoneName) {
+            const modal = document.getElementById('details-modal');
+            const title = document.getElementById('modal-zone-name');
+            const container = document.getElementById('modal-reviews');
+
+            currentDetailsZoneId = zoneId;
+            currentDetailsZoneName = zoneName;
+
+            title.textContent = `Reviews for ${zoneName}`;
+            container.innerHTML = '<p>Loading...</p>';
+            modal.classList.remove('hidden');
+
+            try {
+                const res = await fetch(`api/ratings?zoneId=${zoneId}`);
+                const ratings = await res.json();
+
+                container.innerHTML = '';
+                if (!ratings || ratings.length === 0) {
+                    container.innerHTML = '<p>No reviews yet.</p>';
+                } else {
+                    ratings.forEach(r => {
+                        const date = new Date(r.createdAt).toLocaleDateString();
+                        const threatInfo = r.threatCategoryId
+                            ? `<br><span style="font-size:0.85rem; color:#d63031">Threat: ${getThreatName(r.threatCategoryId)}</span>`
+                            : '';
+
+                        const spammed = r.isValid === false; // backend flag
+                        const spamLabel = spammed ? 'Unflag Spam' : 'Flag Spam';
+                        const spamStyle = spammed
+                            ? 'background:#b2bec3; color:#2d3436; border:none;'
+                            : 'border-color: #e74c3c; color: #e74c3c;';
+                        const dimStyle = spammed ? 'opacity:0.5;' : '';
+
+                        const html = `
+                        <div class="review-item" style="${dimStyle}">
+                            <div class="flex" style="justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <strong>Severity: ${r.severityLevel}/5</strong>
+                                <span style="color: #636E72; font-size: 0.9rem;">${date}</span>
+                            </div>
+                            ${threatInfo}
+                            <p>${r.comment || 'No comment provided.'}</p>
+                            <div class="flex" style="justify-content: flex-end; margin-top: 6px;">
+                                <button class="btn btn-sm btn-secondary"
+                                        style="${spamStyle}"
+                                        onclick="toggleSpam(${r.id}, ${spammed})">
+                                    ${spamLabel}
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                        container.insertAdjacentHTML('beforeend', html);
+                    });
+                }
+            } catch (err) {
+                console.error(err);
+                container.innerHTML = '<p class="text-danger">Error loading reviews.</p>';
+            }
+        }
+
+        // Toggle spam/valid for a rating
+        async function toggleSpam(ratingId, currentlySpammed) {
+            const makingSpam = !currentlySpammed;
+            const actionText = makingSpam ? 'mark this review as spam?' : 'restore this review from spam?';
+
+            if (!confirm(`Are you sure you want to ${actionText}`)) return;
+
+            try {
+                const res = await fetch('api/ratings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: ratingId,
+                        // IMPORTANT: keep this key aligned with backend (likely "isValid")
+                        isValid: !makingSpam
+                    })
+                });
+
+                if (res.ok) {
+                    alert('Review updated.');
+                    // refresh modal + hotspots because stats may change
+                    if (currentDetailsZoneId != null) {
+                        await viewDetails(currentDetailsZoneId, currentDetailsZoneName);
+                    }
+                    await loadHotspots();
+                } else {
+                    // improved error surfacing: show real backend response
+                    const text = await res.text();
+                    console.error('toggleSpam failed:', res.status, text);
+                    let message = text || 'Unknown error';
+                    try {
+                        const json = JSON.parse(text);
+                        if (json && json.error) message = json.error;
+                    } catch (_) { /* not JSON, ignore */ }
+                    alert('Error updating review: ' + message);
+                }
+            } catch (e) {
+                console.error('toggleSpam exception:', e);
+                alert('Failed to update review. Check console for details.');
+            }
+        }
+
+        // ---------- MAP FOR REQUESTS ----------
+
+        function viewRequestLocation(lat, lng, name) {
+            const modal = document.getElementById('request-map-modal');
+            modal.classList.remove('hidden');
+            document.getElementById('request-map-title').textContent = `Location: ${name}`;
+
+            if (!adminMap) {
+                adminMap = L.map('admin-map').setView([lat, lng], 15);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors'
+                }).addTo(adminMap);
+            } else {
+                adminMap.setView([lat, lng], 15);
+                adminMap.invalidateSize();
+            }
+
+            if (adminMarker) {
+                adminMap.removeLayer(adminMarker);
+            }
+            adminMarker = L.marker([lat, lng]).addTo(adminMap)
+                .bindPopup(`<b>${name}</b><br>Requested Location`).openPopup();
+
+            setTimeout(() => {
+                adminMap.invalidateSize();
+            }, 200);
+        }
+
+        // ---------- UTILITIES ----------
+
+        function closeModal(id) {
+            document.getElementById(id).classList.add('hidden');
+        }
+
+        function getThreatName(id) {
+            const map = { 1: 'Construction', 2: 'Overcrowded', 3: 'Lighting' };
+            return map[id] || 'Unknown';
+        }
+
+        window.addEventListener('click', (e) => {
+            const modals = document.querySelectorAll('.modal');
+            modals.forEach(modal => {
+                if (e.target === modal) {
+                    modal.classList.add('hidden');
+                }
+            });
+        });
+    </script>
+
+</body>
+
+</html>
